@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-dev-key-change-in-production')
 DEBUG = env.bool('DEBUG', default=False)
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['*'])
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -62,28 +62,33 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'payto.wsgi.application'
 
-# Database configuration - support both PostgreSQL and SQLite
-DB_ENGINE = env.str('DB_ENGINE', default='django.db.backends.sqlite3')
-DB_NAME = env.str('DB_NAME', default='db.sqlite3')
-
-if DB_ENGINE == 'django.db.backends.sqlite3':
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / DB_NAME,
-        }
-    }
+# Database configuration
+# Prefer DATABASE_URL for cloud providers like Render/Railway.
+DATABASE_URL = env.str('DATABASE_URL', default='')
+if DATABASE_URL:
+    DATABASES = {'default': env.db_url('DATABASE_URL')}
 else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': env.str('DB_NAME', default='payto'),
-            'USER': env.str('DB_USER', default='payto'),
-            'PASSWORD': env.str('DB_PASSWORD', default='payto_dev_pass'),
-            'HOST': env.str('DB_HOST', default='localhost'),
-            'PORT': env.str('DB_PORT', default='5432'),
+    # Fallback for local/dev environments that use explicit DB_* vars or SQLite.
+    DB_ENGINE = env.str('DB_ENGINE', default='django.db.backends.sqlite3')
+    DB_NAME = env.str('DB_NAME', default='db.sqlite3')
+    if DB_ENGINE == 'django.db.backends.sqlite3':
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / DB_NAME,
+            }
         }
-    }
+    else:
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.postgresql',
+                'NAME': env.str('DB_NAME', default='payto'),
+                'USER': env.str('DB_USER', default='payto'),
+                'PASSWORD': env.str('DB_PASSWORD', default='payto_dev_pass'),
+                'HOST': env.str('DB_HOST', default='localhost'),
+                'PORT': env.str('DB_PORT', default='5432'),
+            }
+        }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -108,14 +113,21 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 20,
 }
 
-CORS_ALLOWED_ORIGINS = [
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-]
+])
+# Allow all origins in production for flexibility
+CORS_ALLOW_ALL_ORIGINS = env.bool('CORS_ALLOW_ALL_ORIGINS', default=False)
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
+
+# Respect proxy headers on managed platforms (e.g., Render).
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Celery Configuration
-CELERY_BROKER_URL = env.str('CELERY_BROKER_URL', default='redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = env.str('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
+REDIS_URL = env.str('REDIS_URL', default='redis://localhost:6379/0')
+CELERY_BROKER_URL = env.str('CELERY_BROKER_URL', default=REDIS_URL)
+CELERY_RESULT_BACKEND = env.str('CELERY_RESULT_BACKEND', default=REDIS_URL)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

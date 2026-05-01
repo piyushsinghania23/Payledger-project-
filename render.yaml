@@ -1,0 +1,135 @@
+services:
+  - type: web
+    name: payledger-frontend
+    runtime: static
+    plan: free
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  - type: web
+    name: payledger-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: sh -c "python manage.py migrate && python manage.py seed_merchants && gunicorn payto.wsgi --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: payledger-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: ALLOWED_HOSTS
+        value: "*"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CORS_ALLOW_ALL_ORIGINS
+        value: "true"
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+
+  - type: worker
+    name: payledger-worker
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A payto worker -l info
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SECRET_KEY
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: payledger-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+
+  - type: redis
+    name: payledger-redis
+    plan: free
+
+  - type: worker
+    name: payledger-beat
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A payto beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SECRET_KEY
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: payledger-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: payledger-redis
+          property: connectionString
+
+databases:
+  - name: payledger-db
+    plan: free
+    databaseName: payledger
+    user: payledger

@@ -11,9 +11,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
+from django.db import IntegrityError
+from django.db.utils import OperationalError
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.core.serializers.json import DjangoJSONEncoder
 from datetime import timedelta
+import json
+import time
 
 from .models import Merchant, Payout, LedgerEntry, IdempotencyKey
 from .serializers import (
@@ -108,6 +113,7 @@ class PayoutViewSet(viewsets.ModelViewSet):
             )
 
         merchant = get_object_or_404(Merchant, id=merchant_id)
+        now = timezone.now()
         
         # Get idempotency key from headers
         idempotency_key = request.headers.get('Idempotency-Key')
@@ -117,19 +123,28 @@ class PayoutViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Check for existing idempotency key (active within 24h)
-        try:
-            existing_key = IdempotencyKey.objects.get(
-                merchant=merchant,
-                key=idempotency_key,
-                expires_at__gt=timezone.now()
-            )
-            # Return same response as original
-            payout = existing_key.payout
-            serializer = PayoutDetailSerializer(payout)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except IdempotencyKey.DoesNotExist:
-            pass
+        for attempt in range(3):
+            try:
+                # Cleanup expired keys for this merchant/key pair before lookup/create.
+                IdempotencyKey.objects.filter(
+                    merchant=merchant,
+                    key=idempotency_key,
+                    expires_at__lte=now
+                ).delete()
+
+                # Check for existing idempotency key (active within 24h)
+                existing_key = IdempotencyKey.objects.filter(
+                    merchant=merchant,
+                    key=idempotency_key,
+                    expires_at__gt=now
+                ).first()
+                if existing_key:
+                    return Response(existing_key.response_data, status=status.HTTP_200_OK)
+                break
+            except OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 2:
+                    raise
+                time.sleep(0.05)
 
         # Validate request data
         serializer = self.get_serializer(data=request.data)
@@ -151,17 +166,26 @@ class PayoutViewSet(viewsets.ModelViewSet):
 
         # Store idempotency key
         response_data = PayoutDetailSerializer(payout).data
-        IdempotencyKey.objects.create(
-            merchant=merchant,
-            key=idempotency_key,
-            payout=payout,
-            response_data=response_data,
-            expires_at=timezone.now() + timedelta(hours=24)
-        )
+        try:
+            IdempotencyKey.objects.create(
+                merchant=merchant,
+                key=idempotency_key,
+                payout=payout,
+                response_data=self._to_json_safe(response_data),
+                expires_at=now + timedelta(hours=24)
+            )
+        except IntegrityError:
+            existing_key = IdempotencyKey.objects.filter(
+                merchant=merchant,
+                key=idempotency_key,
+                expires_at__gt=now
+            ).first()
+            if existing_key:
+                return Response(existing_key.response_data, status=status.HTTP_200_OK)
+            raise
 
         return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @transaction.atomic
     def _create_payout_atomic(self, merchant, amount_paise, bank_account_id, idempotency_key):
         """
         Atomically create a payout with balance check.
@@ -181,27 +205,37 @@ class PayoutViewSet(viewsets.ModelViewSet):
         2. Request B: Wait for lock, check balance (40 available) → REJECT
         Result: Only one payout created. CORRECT
         """
-        # Lock merchant row for update - blocks other transactions
-        merchant = Merchant.objects.select_for_update().get(id=merchant.id)
-        
-        # Check available balance (after held amounts)
-        available = merchant.available_balance_paise
-        if available < amount_paise:
-            raise ValueError(
-                f"Insufficient balance. Available: {available} paise, "
-                f"Requested: {amount_paise} paise"
-            )
+        retries = 3
+        for attempt in range(retries):
+            try:
+                with transaction.atomic():
+                    # Lock merchant row for update - blocks other transactions
+                    merchant = Merchant.objects.select_for_update().get(id=merchant.id)
 
-        # Create payout in pending state
-        payout = Payout.objects.create(
-            merchant=merchant,
-            amount_paise=amount_paise,
-            bank_account_id=bank_account_id,
-            status='pending',
-            idempotency_key=idempotency_key
-        )
+                    # Check available balance (after held amounts)
+                    available = merchant.available_balance_paise
+                    if available < amount_paise:
+                        raise ValueError(
+                            f"Insufficient balance. Available: {available} paise, "
+                            f"Requested: {amount_paise} paise"
+                        )
 
-        return payout
+                    # Create payout in pending state
+                    return Payout.objects.create(
+                        merchant=merchant,
+                        amount_paise=amount_paise,
+                        bank_account_id=bank_account_id,
+                        status='pending',
+                        idempotency_key=None
+                    )
+            except OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == retries - 1:
+                    raise
+                time.sleep(0.05)
+
+    def _to_json_safe(self, payload):
+        """Convert serializer output into JSON-safe primitives."""
+        return json.loads(json.dumps(payload, cls=DjangoJSONEncoder))
 
     def get_queryset(self):
         """Filter payouts by merchant if merchant_id query param provided."""
