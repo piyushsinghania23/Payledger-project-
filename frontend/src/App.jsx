@@ -5,7 +5,14 @@ import PayoutForm from './components/PayoutForm.jsx';
 import PayoutHistory from './components/PayoutHistory.jsx';
 import './App.css';
 
-const API_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const normalizeApiUrl = (rawUrl) => {
+  if (!rawUrl) return '/api/v1';
+  const trimmed = String(rawUrl).trim().replace(/\/+$/, '');
+  if (!trimmed) return '/api/v1';
+  return trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
+};
+
+const API_URL = normalizeApiUrl(import.meta.env.VITE_API_URL);
 
 function App() {
   const [merchants, setMerchants] = useState([]);
