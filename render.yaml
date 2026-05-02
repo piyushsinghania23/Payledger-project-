@@ -93,6 +93,9 @@ services:
   - type: redis
     name: payledger-redis
     plan: free
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
 
   - type: worker
     name: payledger-beat
