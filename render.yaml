@@ -2,7 +2,6 @@ services:
   - type: web
     name: payledger-frontend
     runtime: static
-    plan: free
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
@@ -17,7 +16,6 @@ services:
   - type: web
     name: payledger-backend
     runtime: python
-    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: sh -c "python manage.py migrate && python manage.py seed_merchants && gunicorn payto.wsgi --bind 0.0.0.0:$PORT"
@@ -59,7 +57,6 @@ services:
   - type: worker
     name: payledger-worker
     runtime: python
-    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A payto worker -l info
@@ -92,7 +89,6 @@ services:
 
   - type: redis
     name: payledger-redis
-    plan: free
     ipAllowList:
       - source: 0.0.0.0/0
         description: everywhere
@@ -100,7 +96,6 @@ services:
   - type: worker
     name: payledger-beat
     runtime: python
-    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A payto beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
@@ -133,6 +128,5 @@ services:
 
 databases:
   - name: payledger-db
-    plan: free
     databaseName: payledger
     user: payledger
